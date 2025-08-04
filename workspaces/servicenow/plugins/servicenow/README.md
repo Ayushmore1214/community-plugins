@@ -4,19 +4,56 @@ This is the frontend implementation of the ServiceNow plugin for Backstage.
 
 It is responsible for rendering the ServiceNow tab content, fetching incident data, and integrating with Backstage's dynamic plugin system.
 
----
 
-## 🚀 Getting Started
+## Getting Started
 
-1. Install dependencies:
+1. **Install dependencies**
 
-   ```bash
+   From this directory, install the necessary dependencies:
+
+   ```
    yarn install
    ```
 
-2. Start the Backstage dev app:
+2. **Run the development app**
 
-Your plugin has been added to the example app in this `plugins/servicenow` directory, meaning you'll be able to access it by running `yarn start` in the current directory, and then navigating to [/servicenow](http://localhost:3000/servicenow).
+   Start the example app:
+
+   ```
+   yarn start
+   ```
+
+   After starting, you can access the plugin at:  
+   http://localhost:3000/servicenow
+
+## Dynamic Plugin Configuration
+
+To use or customize this plugin in a Backstage environment that supports dynamic plugins (such as RHDH), add entries to your `dynamic-plugins.yaml` file. Here is an example configuration:
+
+```
+dynamicPlugins:
+  includes:
+    - package: '@backstage/plugin-servicenow'
+      disabled: false
+      mountPoints:
+        - mountPoint: entity.page.tabs
+          config:
+            label: 'ServiceNow Tickets'
+            icon: 'incident'
+            isMyProfile: true
+```
+
+- **mountPoint:** Specifies where in the Backstage UI the plugin tab will appear.
+- **label/icon:** Sets the appearance of the tab.
+- **isMyProfile:** If true, the tab will show only tickets assigned to the currently logged-in user.
+
+## Identity Handling
+
+When running in a production environment or with dynamic plugins enabled, the "My ServiceNow Tickets" tab will show incidents relevant to the logged-in user. When running in the local development app, user-specific filtering may not be available, and all incidents may be shown.
+
+## Development Notes
+
+This plugin is already included in the development app provided in this repository, so you can use the steps above for immediate testing. For integration into your own Backstage instance, consult Backstage documentation for dynamic plugin configuration options.
 
 ## Frontend Configuration
 
@@ -27,8 +64,3 @@ Please refer to the main plugin [README](../README.md) for complete instructions
 - Configuring tabs
 - Using the `isMyProfile` condition on mount point configuration
 
-## Notes on Identity Handling
-
-When using this plugin in a Backstage instance that supports dynamic plugins (e.g., RHDH), it enables user-specific incident filtering in the **"My ServiceNow Tickets"** tab, shown on the entity page of the currently logged-in user.
-
-> **NOTE:** The local dev app does **not** support user-specific incident filtering.
