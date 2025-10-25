@@ -35,8 +35,7 @@
     "@backstage/errors": "backstage:^",
     "@backstage/plugin-scaffolder-node": "backstage:^",
     "cross-fetch": "^4.0.0",
-    "jenkins": "^1.1.0",
-    "zod": "^4.1.12"
+    "jenkins": "^1.1.0"
   },
   "devDependencies": {
     "@backstage/cli": "backstage:^"
