@@ -202,7 +202,8 @@ When patching an older release, follow the steps below to ensure the correct wor
    - This is necessary for history to be clear on the latest branch.
    - You can use `git cherry-pick --no-commit workspace/${workspace}` and only commit the `CHANGELOG` files.
 
----
+-----
+
 ## FAQ
 
 Here are some common issues and questions that contributors often face.
@@ -211,17 +212,17 @@ Here are some common issues and questions that contributors often face.
 
 If your change affects any code inside a `plugins/` or `packages/` directory, it needs a changeset file to document the change for the release.
 
-1.  Go to the **root** of the `community-plugins` repository (not the workspace folder).
+1.  Go to the root of the `community-plugins` repository (not the workspace folder).
 2.  Run the command: `yarn dlx @changesets/cli`
 3.  Follow the prompts:
-    * Use the **arrow keys** and **spacebar** to select the package(s) you changed.
-    * Select the version bump type (usually `patch` for bug fixes, `minor` for features).
-    * Write a short summary of your change (e.g., `fix(jenkins): Correct buildJob parameter passing`).
+      * Use the arrow keys and spacebar to select the package(s) you changed.
+      * Select the version bump type (usually `patch` for bug fixes, `minor` for features).
+      * Write a short summary of your change (e.g., `fix(jenkins): Correct buildJob parameter passing`).
 4.  A new file like `.changeset/small-turtles-cry.md` will be created. Add and commit this file to your PR.
 
-### My PR is full of unrelated files ("Knip" changes, `yarn.lock` conflicts)!
+### My PR is full of unrelated files ("Knip" changes, `yarn.lock` conflicts)\!
 
-This happens when your branch is out-of-date with the main `main` branch. You need to **rebase** your branch to include the latest changes *before* your commits.
+This happens when your branch is out-of-date with the main `main` branch. You need to rebase your branch to include the latest changes *before* your commits.
 
 1.  Make sure your local `main` branch is up-to-date:
     ```bash
@@ -244,7 +245,7 @@ This happens when your branch is out-of-date with the main `main` branch. You ne
 
 ### A GitHub check is stuck "waiting for status to be reported".
 
-This is a common GitHub glitch. The easiest way to fix it is to **close your Pull Request and then immediately reopen it**. This forces GitHub to re-trigger the checks.
+This is a common GitHub glitch. The easiest way to fix it is to close your Pull Request and then immediately reopen it. This forces GitHub to re-trigger the checks.
 
 ### The "API Report" check is failing.
 
@@ -271,9 +272,9 @@ This means your code doesn't match the project's automatic formatting rules.
 
 ### How do I create a new plugin?
 
-1.  From the **root** of the `community-plugins` repository, run the new plugin creation script:
+1.  From the root of the `community-plugins` repository, run the new plugin creation script:
     ```bash
     yarn new
     ```
-2.  Follow the interactive prompts. It will ask you for the plugin name, what kind of plugin it is (frontend, backend, etc.), and will create all the boilerplate files for you in a new folder under `workNorwayspaces/`.
+2.  Follow the interactive prompts. It will ask you for the plugin name, what kind of plugin it is (frontend, backend, etc.), and will create all the boilerplate files for you in a new folder under `workspaces/`.
 3.  Commit all the newly created files and open a PR.
