@@ -1,0 +1,122 @@
+name: Multi-Workspace PR Detection
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+permissions:
+  pull-requests: write
+  contents: read
+  issues: write
+
+jobs:
+  detect-multi-workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@63c24ba6bd7ba022e95695ff85de572c04a18142 # v2.7.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout PR head
+        uses: actions/checkout@1d96c772d19495a3b5c517cd2bc0cb401ea0529f # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        run: git fetch origin ${{ github.event.pull_request.base.ref }}
+
+      - name: Set up Node
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8 # v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org/
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Detect changed workspaces
+        id: detect-workspaces
+        run: |
+          WORKSPACES=$(node scripts/ci/list-workspaces-with-changes.js)
+          echo "workspaces=$WORKSPACES" >> $GITHUB_OUTPUT
+        env:
+          BASE_REF: origin/${{ github.event.pull_request.base.ref }}
+
+      - name: Check for multi-workspace PR
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const workspaces = JSON.parse('${{ steps.detect-workspaces.outputs.workspaces }}');
+            
+            // Filter out 'noop' workspace
+            const realWorkspaces = workspaces.filter(w => w !== 'noop');
+            
+            if (realWorkspaces.length <= 1) {
+              console.log('Single workspace or no workspace changes detected');
+              
+              // Remove multi-workspace label if it exists
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  name: 'multi-workspace'
+                });
+              } catch (error) {
+                // Label might not exist, ignore
+              }
+              
+              return;
+            }
+
+            // Multiple workspaces detected
+            const marker = '<!-- multi-workspace-detection -->';
+            const comment = `${marker}
+## 🔍 Multi-Workspace PR Detected
+
+This PR affects **${realWorkspaces.length} workspaces**: ${realWorkspaces.join(', ')}
+
+**Guidance:** Consider splitting this into separate PRs for easier review:
+- One PR per workspace simplifies testing and release
+- Maintainers can merge changes independently
+- Reduces risk of conflicts
+
+If these changes are intentionally coupled, please explain why in the PR description.`;
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment => 
+              comment.body && comment.body.includes(marker)
+            );
+
+            // Update or create comment
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: comment
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment
+              });
+            }
+
+            // Add multi-workspace label
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['multi-workspace']
+            });

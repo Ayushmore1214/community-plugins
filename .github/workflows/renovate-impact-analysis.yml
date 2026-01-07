@@ -1,0 +1,196 @@
+name: Renovate Impact Analysis
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  analyze-renovate:
+    if: github.event.pull_request.user.login == 'renovate[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@63c24ba6bd7ba022e95695ff85de572c04a18142 # v2.7.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@1d96c772d19495a3b5c517cd2bc0cb401ea0529f # v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        run: git fetch origin ${{ github.event.pull_request.base.ref }}
+
+      - name: Analyze dependency changes
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const { execSync } = require('child_process');
+            const fs = require('fs');
+            const path = require('path');
+            const semver = require('semver');
+
+            // Get changed files
+            const baseSha = '${{ github.event.pull_request.base.sha }}';
+            const headSha = '${{ github.event.pull_request.head.sha }}';
+            const changedFiles = execSync(`git diff --name-only ${baseSha}...${headSha}`)
+              .toString()
+              .split('\n')
+              .filter(f => f.endsWith('package.json') && f.trim() !== '');
+
+            if (changedFiles.length === 0) {
+              console.log('No package.json changes detected');
+              return;
+            }
+
+            // Analyze each changed package.json
+            const workspaceChanges = {};
+            
+            for (const file of changedFiles) {
+              // Extract workspace name
+              const match = file.match(/^workspaces\/([^/]+)\//);
+              if (!match) continue;
+              
+              const workspace = match[1];
+
+              try {
+                // Get old and new package.json
+                const oldContent = execSync(`git show ${baseSha}:${file}`, { encoding: 'utf8' });
+                const newContent = fs.readFileSync(file, 'utf8');
+                
+                const oldPkg = JSON.parse(oldContent);
+                const newPkg = JSON.parse(newContent);
+
+                // Compare dependencies
+                const depTypes = ['dependencies', 'devDependencies', 'peerDependencies'];
+                const changes = [];
+
+                for (const depType of depTypes) {
+                  const oldDeps = oldPkg[depType] || {};
+                  const newDeps = newPkg[depType] || {};
+
+                  for (const [pkg, newVersion] of Object.entries(newDeps)) {
+                    const oldVersion = oldDeps[pkg];
+                    if (oldVersion && oldVersion !== newVersion) {
+                      const oldClean = oldVersion.replace(/^[\^~]/, '');
+                      const newClean = newVersion.replace(/^[\^~]/, '');
+                      
+                      let diffType = 'unknown';
+                      try {
+                        diffType = semver.diff(oldClean, newClean) || 'unknown';
+                      } catch (e) {
+                        // Semver parsing failed
+                      }
+
+                      changes.push({
+                        package: pkg,
+                        oldVersion: oldClean,
+                        newVersion: newClean,
+                        type: diffType,
+                        depType
+                      });
+                    }
+                  }
+                }
+
+                if (changes.length > 0) {
+                  if (!workspaceChanges[workspace]) {
+                    workspaceChanges[workspace] = [];
+                  }
+                  workspaceChanges[workspace].push(...changes);
+                }
+              } catch (error) {
+                console.log(`Warning: Could not process ${file}:`, error.message);
+              }
+            }
+
+            if (Object.keys(workspaceChanges).length === 0) {
+              console.log('No dependency changes detected');
+              return;
+            }
+
+            // Build impact analysis
+            const marker = '<!-- renovate-impact-analysis -->';
+            let comment = `${marker}
+## 🔧 Dependency Update Impact Analysis\n\n`;
+
+            const totalWorkspaces = Object.keys(workspaceChanges).length;
+            comment += `**Affected Workspaces:** ${totalWorkspaces}\n\n`;
+
+            // Group changes by package
+            const packageChanges = {};
+            for (const [workspace, changes] of Object.entries(workspaceChanges)) {
+              for (const change of changes) {
+                if (!packageChanges[change.package]) {
+                  packageChanges[change.package] = {
+                    oldVersion: change.oldVersion,
+                    newVersion: change.newVersion,
+                    type: change.type,
+                    workspaces: []
+                  };
+                }
+                packageChanges[change.package].workspaces.push(workspace);
+              }
+            }
+
+            // Display each package update
+            for (const [pkg, info] of Object.entries(packageChanges)) {
+              const emoji = info.type === 'major' ? '🔴' : 
+                           info.type === 'minor' ? '🟡' : 
+                           info.type === 'patch' ? '🟢' : '⚪';
+              
+              comment += `### ${emoji} \`${pkg}\`\n\n`;
+              comment += `**Version:** ${info.oldVersion} → ${info.newVersion} (${info.type})\n`;
+              comment += `**Affected:** ${info.workspaces.length} workspace(s)\n\n`;
+              
+              if (info.workspaces.length <= 5) {
+                comment += `Workspaces: ${info.workspaces.join(', ')}\n\n`;
+              } else {
+                comment += `Workspaces: ${info.workspaces.slice(0, 5).join(', ')}, and ${info.workspaces.length - 5} more\n\n`;
+              }
+
+              // Risk assessment
+              if (info.type === 'major') {
+                comment += '⚠️ **Major version update** - May contain breaking changes. Review changelog carefully.\n\n';
+              } else if (info.type === 'minor') {
+                comment += '✅ **Minor version update** - Should be backward compatible. Low risk.\n\n';
+              } else if (info.type === 'patch') {
+                comment += '✅ **Patch version update** - Bug fixes only. Very low risk.\n\n';
+              }
+            }
+
+            comment += '---\n';
+            comment += '*This analysis helps maintainers quickly assess the scope and risk of dependency updates.*';
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment => 
+              comment.body && comment.body.includes(marker)
+            );
+
+            // Update or create comment
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: comment
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment
+              });
+            }

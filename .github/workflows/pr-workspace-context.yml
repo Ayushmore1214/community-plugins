@@ -1,0 +1,166 @@
+name: PR Workspace Context
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  workspace-context:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@63c24ba6bd7ba022e95695ff85de572c04a18142 # v2.7.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout PR head
+        uses: actions/checkout@1d96c772d19495a3b5c517cd2bc0cb401ea0529f # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        run: git fetch origin ${{ github.event.pull_request.base.ref }}
+
+      - name: Set up Node
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8 # v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org/
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Detect changed workspaces
+        id: detect-workspaces
+        run: |
+          WORKSPACES=$(node scripts/ci/list-workspaces-with-changes.js)
+          echo "workspaces=$WORKSPACES" >> $GITHUB_OUTPUT
+        env:
+          BASE_REF: origin/${{ github.event.pull_request.base.ref }}
+
+      - name: Extract workspace metadata and post comment
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const { execSync } = require('child_process');
+            const fs = require('fs');
+            const path = require('path');
+
+            // Parse workspace list
+            const workspaces = JSON.parse('${{ steps.detect-workspaces.outputs.workspaces }}');
+            
+            if (!workspaces || workspaces.length === 0) {
+              console.log('No workspaces detected or only noop workspace');
+              return;
+            }
+
+            // Filter out 'noop' workspace
+            const realWorkspaces = workspaces.filter(w => w !== 'noop');
+            if (realWorkspaces.length === 0) {
+              console.log('Only noop workspace detected, skipping');
+              return;
+            }
+
+            // Load CODEOWNERS
+            const codeownersContent = fs.readFileSync('.github/CODEOWNERS', 'utf8');
+            const codeownersLines = codeownersContent.split('\n');
+
+            // Build metadata table
+            let tableRows = [];
+            let allOwners = new Set();
+
+            for (const workspace of realWorkspaces) {
+              // Find owners from CODEOWNERS
+              const pattern = `/workspaces/${workspace}`;
+              const ownerLine = codeownersLines.find(line => 
+                line.trim().startsWith(pattern) && !line.trim().startsWith('#')
+              );
+              
+              let owners = [];
+              if (ownerLine) {
+                const parts = ownerLine.split(/\s+/);
+                owners = parts.slice(1).filter(o => o.startsWith('@') && o !== '@backstage/community-plugins-maintainers');
+              }
+
+              // Read backstage.json
+              const backstageJsonPath = path.join('workspaces', workspace, 'backstage.json');
+              let backstageVersion = 'N/A';
+              if (fs.existsSync(backstageJsonPath)) {
+                const backstageJson = JSON.parse(fs.readFileSync(backstageJsonPath, 'utf8'));
+                backstageVersion = backstageJson.version || 'N/A';
+              }
+
+              // Read bcp.json
+              const bcpJsonPath = path.join('workspaces', workspace, 'bcp.json');
+              let autoVersionBump = '❌';
+              if (fs.existsSync(bcpJsonPath)) {
+                const bcpJson = JSON.parse(fs.readFileSync(bcpJsonPath, 'utf8'));
+                autoVersionBump = bcpJson.autoVersionBump ? '✅' : '❌';
+              }
+
+              // Add to table
+              const ownersDisplay = owners.length > 0 ? owners.join(', ') : 'None';
+              tableRows.push(`| ${workspace} | ${backstageVersion} | ${autoVersionBump} | ${ownersDisplay} |`);
+
+              // Collect owners for review request
+              owners.forEach(owner => allOwners.add(owner));
+            }
+
+            // Build comment
+            const marker = '<!-- workspace-context -->';
+            const comment = `${marker}
+## 📦 Affected Workspaces
+
+| Workspace | Backstage Version | Auto Version Bump | Owners |
+|-----------|-------------------|-------------------|--------|
+${tableRows.join('\n')}
+
+**Note:** Workspace owners have been notified for review.`;
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment => 
+              comment.body && comment.body.includes(marker)
+            );
+
+            // Update or create comment
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: comment
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment
+              });
+            }
+
+            // Request reviews from workspace owners
+            if (allOwners.size > 0) {
+              const reviewers = Array.from(allOwners).map(o => o.replace('@', ''));
+              try {
+                await github.rest.pulls.requestReviewers({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.issue.number,
+                  reviewers: reviewers
+                });
+              } catch (error) {
+                console.log('Note: Could not request reviews (users may not have permission):', error.message);
+              }
+            }

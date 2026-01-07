@@ -1,0 +1,182 @@
+name: PR Compatibility Check
+
+on:
+  pull_request:
+    paths:
+      - 'workspaces/*/backstage.json'
+      - 'workspaces/**/package.json'
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  check-compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@63c24ba6bd7ba022e95695ff85de572c04a18142 # v2.7.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@1d96c772d19495a3b5c517cd2bc0cb401ea0529f # v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        run: git fetch origin ${{ github.event.pull_request.base.ref }}
+
+      - name: Set up Node
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8 # v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org/
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Check workspace compatibility
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const { execSync } = require('child_process');
+            const fs = require('fs');
+            const path = require('path');
+            const semver = require('semver');
+
+            // Get changed workspaces
+            const workspacesOutput = execSync('node scripts/ci/list-workspaces-with-changes.js', {
+              env: { ...process.env, BASE_REF: 'origin/${{ github.event.pull_request.base.ref }}' },
+              encoding: 'utf8'
+            });
+            const workspaces = JSON.parse(workspacesOutput).filter(w => w !== 'noop');
+
+            if (workspaces.length === 0) {
+              console.log('No workspace changes detected');
+              return;
+            }
+
+            // Get latest Backstage version
+            let latestVersion;
+            try {
+              const response = await fetch('https://versions.backstage.io/v1/tags/main/manifest.json');
+              const manifest = await response.json();
+              latestVersion = manifest.releaseVersion;
+            } catch (error) {
+              console.log('Could not fetch latest Backstage version:', error.message);
+              return;
+            }
+
+            // Check each workspace
+            const compatibilityInfo = [];
+            for (const workspace of workspaces) {
+              const backstageJsonPath = path.join('workspaces', workspace, 'backstage.json');
+              
+              if (!fs.existsSync(backstageJsonPath)) {
+                continue;
+              }
+
+              const backstageJson = JSON.parse(fs.readFileSync(backstageJsonPath, 'utf8'));
+              const currentVersion = backstageJson.version;
+
+              if (!currentVersion) {
+                continue;
+              }
+
+              // Calculate version difference
+              const current = semver.clean(currentVersion);
+              const latest = semver.clean(latestVersion);
+
+              if (!current || !latest) {
+                continue;
+              }
+
+              let status = '🟢';
+              let statusText = 'Up to date';
+              let versionDiff = 0;
+
+              if (semver.major(current) !== semver.major(latest)) {
+                versionDiff = semver.major(latest) - semver.major(current);
+                status = '🔴';
+                statusText = `${versionDiff} major version(s) behind`;
+              } else {
+                versionDiff = semver.minor(latest) - semver.minor(current);
+                if (versionDiff >= 3) {
+                  status = '🔴';
+                  statusText = `${versionDiff} minor versions behind`;
+                } else if (versionDiff === 2) {
+                  status = '🟠';
+                  statusText = '2 minor versions behind';
+                } else if (versionDiff === 1) {
+                  status = '🟡';
+                  statusText = '1 minor version behind';
+                }
+              }
+
+              if (versionDiff > 0) {
+                compatibilityInfo.push({
+                  workspace,
+                  currentVersion,
+                  latestVersion,
+                  status,
+                  statusText,
+                  versionDiff
+                });
+              }
+            }
+
+            if (compatibilityInfo.length === 0) {
+              console.log('All changed workspaces are up to date!');
+              return;
+            }
+
+            // Build comment
+            const marker = '<!-- compatibility-check -->';
+            let comment = `${marker}
+## 🔄 Backstage Compatibility Check
+
+**Latest Backstage Version:** ${latestVersion}
+
+The following workspaces are not on the latest Backstage version:\n\n`;
+
+            comment += '| Workspace | Current Version | Latest Version | Status |\n';
+            comment += '|-----------|----------------|----------------|--------|\n';
+
+            for (const info of compatibilityInfo) {
+              comment += `| ${info.workspace} | ${info.currentVersion} | ${info.latestVersion} | ${info.status} ${info.statusText} |\n`;
+            }
+
+            comment += '\n';
+            for (const info of compatibilityInfo) {
+              const upgradeUrl = `https://backstage.github.io/upgrade-helper/?from=${info.currentVersion}&to=${info.latestVersion}`;
+              comment += `- **${info.workspace}**: [Upgrade from ${info.currentVersion} to ${info.latestVersion}](${upgradeUrl})\n`;
+            }
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment => 
+              comment.body && comment.body.includes(marker)
+            );
+
+            // Update or create comment
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: comment
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment
+              });
+            }
