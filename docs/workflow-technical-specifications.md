@@ -461,6 +461,29 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import semver from 'semver';
 
+// Helper function to extract workspace name from file path
+function extractWorkspace(filePath) {
+  // Extract workspace name from path like "workspaces/acr/package.json"
+  const match = filePath.match(/^workspaces\/([^/]+)\//);
+  return match ? match[1] : null;
+}
+
+function compareDependencies(oldDeps, newDeps) {
+  const changes = [];
+  for (const [pkg, newVersion] of Object.entries(newDeps || {})) {
+    const oldVersion = oldDeps?.[pkg];
+    if (oldVersion && oldVersion !== newVersion) {
+      changes.push({
+        package: pkg,
+        oldVersion: oldVersion.replace(/^[\^~]/, ''),
+        newVersion: newVersion.replace(/^[\^~]/, ''),
+        type: semver.diff(oldVersion, newVersion)
+      });
+    }
+  }
+  return changes;
+}
+
 function analyzeDependencyChanges() {
   // Get changed package.json files
   const changedFiles = execSync('git diff --name-only origin/main...HEAD')
@@ -496,28 +519,6 @@ function analyzeDependencyChanges() {
   }
   
   return changes;
-}
-
-function compareDependencies(oldDeps, newDeps) {
-  const changes = [];
-  for (const [pkg, newVersion] of Object.entries(newDeps || {})) {
-    const oldVersion = oldDeps?.[pkg];
-    if (oldVersion && oldVersion !== newVersion) {
-      changes.push({
-        package: pkg,
-        oldVersion: oldVersion.replace(/^[\^~]/, ''),
-        newVersion: newVersion.replace(/^[\^~]/, ''),
-        type: semver.diff(oldVersion, newVersion)
-      });
-    }
-  }
-  return changes;
-}
-
-function extractWorkspace(filePath) {
-  // Extract workspace name from path like "workspaces/acr/package.json"
-  const match = filePath.match(/^workspaces\/([^/]+)\//);
-  return match ? match[1] : null;
 }
 ```
 
