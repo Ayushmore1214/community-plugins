@@ -71,9 +71,11 @@ import * as codeowners from 'codeowners-utils';
 async function extractWorkspaceMetadata(workspace) {
   const rootPath = path.resolve(process.cwd());
   
-  // Read CODEOWNERS
+  // Read CODEOWNERS (using same pattern as list-maintainer-workspaces.js)
   const codeownersPath = path.join(rootPath, '.github', 'CODEOWNERS');
   const codeOwnerEntries = await codeowners.loadOwners(codeownersPath);
+  
+  // Find owners for this workspace
   const owners = codeOwnerEntries
     .filter(c => c.pattern === `/workspaces/${workspace}`)
     .map(o => o.owners)
@@ -456,6 +458,7 @@ if: github.event.pull_request.user.login == 'renovate[bot]'
 ```javascript
 #!/usr/bin/env node
 import { execSync } from 'child_process';
+import fs from 'fs';
 import semver from 'semver';
 
 function analyzeDependencyChanges() {
@@ -463,7 +466,7 @@ function analyzeDependencyChanges() {
   const changedFiles = execSync('git diff --name-only origin/main...HEAD')
     .toString()
     .split('\n')
-    .filter(f => f.endsWith('package.json'));
+    .filter(f => f.endsWith('package.json') && f.trim() !== '');
   
   const changes = [];
   
@@ -471,18 +474,24 @@ function analyzeDependencyChanges() {
     const workspace = extractWorkspace(file);
     if (!workspace) continue;
     
-    // Get old and new package.json
-    const oldContent = execSync(`git show origin/main:${file}`).toString();
-    const newContent = fs.readFileSync(file, 'utf8');
+    try {
+      // Get old and new package.json with error handling
+      const oldContent = execSync(`git show origin/main:${file}`, { encoding: 'utf8' });
+      const newContent = fs.readFileSync(file, 'utf8');
     
-    const oldPkg = JSON.parse(oldContent);
-    const newPkg = JSON.parse(newContent);
+      const oldPkg = JSON.parse(oldContent);
+      const newPkg = JSON.parse(newContent);
     
-    // Compare dependencies
-    const depChanges = compareDependencies(oldPkg.dependencies, newPkg.dependencies);
+      // Compare dependencies
+      const depChanges = compareDependencies(oldPkg.dependencies, newPkg.dependencies);
     
-    if (depChanges.length > 0) {
-      changes.push({ workspace, changes: depChanges });
+      if (depChanges.length > 0) {
+        changes.push({ workspace, changes: depChanges });
+      }
+    } catch (error) {
+      // File may not exist in base branch (new file) or be invalid JSON
+      console.warn(`Warning: Could not process ${file}:`, error.message);
+      continue;
     }
   }
   
@@ -503,6 +512,12 @@ function compareDependencies(oldDeps, newDeps) {
     }
   }
   return changes;
+}
+
+function extractWorkspace(filePath) {
+  // Extract workspace name from path like "workspaces/acr/package.json"
+  const match = filePath.match(/^workspaces\/([^/]+)\//);
+  return match ? match[1] : null;
 }
 ```
 
