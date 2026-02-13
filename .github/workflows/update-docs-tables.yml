@@ -1,4 +1,4 @@
-name: Update Documentation Tables
+name: Update Documentation Tables  #A workflow to update the workspace talbles
 on:
   workflow_dispatch: # Allows manual trigger from GitHub UI
 
