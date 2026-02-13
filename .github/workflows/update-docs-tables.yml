@@ -24,10 +24,10 @@ jobs:
 
       - name: Run Update Scripts
         run: |
-          echo "🔄 Updating Workspaces Table..."
+          echo " Updating Workspaces Table..."
           node scripts/list-workspaces-for-docs.js
 
-          echo "🔄 Updating Compatibility Tables..."
+          echo " Updating Compatibility Tables..."
           node scripts/list-compatibility.js
 
       - name: Check for changes
@@ -35,10 +35,10 @@ jobs:
         run: |
           if [[ -n $(git status --porcelain) ]]; then
             echo "changes_detected=true" >> $GITHUB_OUTPUT
-            echo "📝 Changes detected in documentation."
+            echo " Changes detected in documentation."
           else
             echo "changes_detected=false" >> $GITHUB_OUTPUT
-            echo "✅ No documentation changes detected."
+            echo " No documentation changes detected."
           fi
 
       - name: Create Pull Request
