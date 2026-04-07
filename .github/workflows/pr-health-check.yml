@@ -1,0 +1,218 @@
+name: PR Health Check
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  pull-requests: write
+  contents: read
+  checks: read
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@63c24ba6bd7ba022e95695ff85de572c04a18142 # v2.7.0
+        with:
+          egress-policy: audit
+
+      - name: Get PR number
+        id: get-pr
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            let prNumber;
+            if (context.eventName === 'pull_request') {
+              prNumber = context.issue.number;
+            } else if (context.eventName === 'workflow_run') {
+              const { data: prs } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                head: `${context.repo.owner}:${context.payload.workflow_run.head_branch}`
+              });
+              if (prs.length > 0) {
+                prNumber = prs[0].number;
+              }
+            }
+            
+            if (!prNumber) {
+              console.log('Could not determine PR number');
+              return;
+            }
+            
+            core.setOutput('pr_number', prNumber);
+
+      - name: Wait for checks to complete
+        if: steps.get-pr.outputs.pr_number
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const prNumber = ${{ steps.get-pr.outputs.pr_number }};
+            
+            // Get PR details
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            // Wait up to 5 minutes for checks to complete
+            const maxWaitTime = 5 * 60 * 1000; // 5 minutes
+            const startTime = Date.now();
+            
+            while (Date.now() - startTime < maxWaitTime) {
+              const { data: checkRuns } = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: pr.head.sha,
+                per_page: 100
+              });
+
+              const pendingChecks = checkRuns.check_runs.filter(
+                check => check.status !== 'completed'
+              );
+
+              if (pendingChecks.length === 0) {
+                console.log('All checks completed');
+                break;
+              }
+
+              console.log(`Waiting for ${pendingChecks.length} checks to complete...`);
+              await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+            }
+
+      - name: Aggregate check results
+        if: steps.get-pr.outputs.pr_number
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const prNumber = ${{ steps.get-pr.outputs.pr_number }};
+            
+            // Get PR details
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            // Get check runs
+            const { data: checkRuns } = await github.rest.checks.listForRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: pr.head.sha,
+              per_page: 100
+            });
+
+            // Parse check results
+            const results = {
+              changeset: { status: '⏳', message: 'Pending' },
+              lockfile: { status: '⏳', message: 'Pending' },
+              ci: { status: '⏳', message: 'Pending' },
+              prettier: { status: '⏳', message: 'Pending' },
+              apiReports: { status: '⏳', message: 'Pending' }
+            };
+
+            for (const check of checkRuns.check_runs) {
+              const name = check.name.toLowerCase();
+              
+              if (name.includes('changeset') || name.includes('verify changesets')) {
+                if (check.conclusion === 'success') {
+                  results.changeset = { status: '✅', message: 'Changeset found' };
+                } else if (check.conclusion === 'failure') {
+                  results.changeset = { status: '❌', message: 'Missing changeset - run `yarn changeset` in workspace' };
+                } else if (check.status === 'completed') {
+                  results.changeset = { status: '⚠️', message: check.conclusion || 'Unknown' };
+                }
+              }
+
+              if (name.includes('lockfile') || name.includes('duplicates')) {
+                if (check.conclusion === 'success') {
+                  results.lockfile = { status: '✅', message: 'No duplicates detected' };
+                } else if (check.conclusion === 'failure') {
+                  results.lockfile = { status: '❌', message: 'Lockfile has duplicate dependencies' };
+                } else if (check.status === 'completed') {
+                  results.lockfile = { status: '⚠️', message: check.conclusion || 'Unknown' };
+                }
+              }
+
+              if (name.includes('ci step') || (name.includes('workspace') && name.includes('ci'))) {
+                if (check.conclusion === 'success') {
+                  results.ci = { status: '✅', message: 'All checks passed' };
+                } else if (check.conclusion === 'failure') {
+                  results.ci = { status: '❌', message: 'CI checks failed - see workflow logs' };
+                } else if (check.status === 'completed') {
+                  results.ci = { status: '⚠️', message: check.conclusion || 'Unknown' };
+                }
+              }
+
+              if (name.includes('prettier')) {
+                if (check.conclusion === 'success') {
+                  results.prettier = { status: '✅', message: 'Code is formatted' };
+                } else if (check.conclusion === 'failure') {
+                  results.prettier = { status: '❌', message: 'Run `yarn prettier:fix`' };
+                } else if (check.status === 'completed') {
+                  results.prettier = { status: '⚠️', message: check.conclusion || 'Unknown' };
+                }
+              }
+
+              if (name.includes('api report')) {
+                if (check.conclusion === 'success') {
+                  results.apiReports = { status: '✅', message: 'API reports up to date' };
+                } else if (check.conclusion === 'failure') {
+                  results.apiReports = { status: '⚠️', message: 'API changes detected - review required' };
+                } else if (check.status === 'completed') {
+                  results.apiReports = { status: '⚠️', message: check.conclusion || 'Unknown' };
+                }
+              }
+            }
+
+            // Build comment
+            const marker = '<!-- pr-health-check -->';
+            const comment = `${marker}
+## ✅ PR Health Check
+
+| Check | Status | Details |
+|-------|--------|---------|
+| Changesets | ${results.changeset.status} | ${results.changeset.message} |
+| Lockfile | ${results.lockfile.status} | ${results.lockfile.message} |
+| CI Build | ${results.ci.status} | ${results.ci.message} |
+| Prettier | ${results.prettier.status} | ${results.prettier.message} |
+| API Reports | ${results.apiReports.status} | ${results.apiReports.message} |
+
+**Note:** This is informational only. Maintainers make final merge decisions.
+
+*Last updated: ${new Date().toUTCString()}*`;
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const botComment = comments.find(comment => 
+              comment.body && comment.body.includes(marker)
+            );
+
+            // Update or create comment
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: comment
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: comment
+              });
+            }

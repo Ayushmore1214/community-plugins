@@ -1,0 +1,37 @@
+name: First-Time Contributor Welcome
+
+on:
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  welcome:
+    if: github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const comment = `## 👋 Welcome to Backstage Community Plugins!
+
+            Thank you for your contribution! Here's a quick checklist:
+
+            - [ ] I've read [CONTRIBUTING.md](https://github.com/backstage/community-plugins/blob/main/CONTRIBUTING.md)
+            - [ ] I've added a changeset (run \`yarn changeset\` in workspace)
+            - [ ] I've run \`yarn prettier:fix\`
+            - [ ] I've tested my changes locally
+            - [ ] I've signed my commits (DCO)
+
+            **Need help?** Join [Discord](https://discord.gg/backstage-687207715902193673)!
+
+            <!-- first-time-welcome -->`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: comment
+            });
